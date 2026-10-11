@@ -466,3 +466,56 @@ func expandEnv(s string) string         // regexp `\$\{([A-Za-z_][A-Za-z0-9_]*)(
 - **Phase 2：接 LLM。** 在 `tick` 裡 `fuser.Fuse` 之後呼叫 LLM；fuser 加 "Available actions" section；`-print-prompt` 改預設 false。
 - **Phase 3：actions + guard。** 把 LLM 輸出對應到後端的 `POST /api/v1/tasks`（step type `MOVE / STANDUP / LIEDOWN / SPEAK / WAIT`）；guard 用 `RobotState.Current()` 和 `TaskStatus.Current()` 的型別化狀態擋動作（ESTOP、pose 無效、busy），**不解析 prompt 文字**。
 - 更多 sensor 時再考慮 OM1 的 registry 與 config 驅動接線。
+- **任務失敗後的診斷與調參重派**：失敗時先看 log、調整參數再重新派送，而不是原封不動重試。見 §10。
+
+---
+
+## 10. 任務失敗後：看 log、調參數、重新派送（構想，不在這次範圍）
+
+目前的失敗處理（`docs/runtime-agent-plan.md` 的 S2）只有「重試一次，連續失敗 2 次就停止並通知」。
+但很多失敗重試同樣的參數只會再失敗一次（例如導航容許誤差太小、速度太快、逾時太短）。
+這裡的構想是：失敗時先讓 agent **看 log 找原因**，**調整參數**後再重新派送，而不是原封不動重試。
+
+### 10.1 流程
+
+```
+task_status:task_failed（wake）
+  │  prompt 已經有：哪個任務、第幾步、error_msg（§6.2）
+  ▼
+fetch_task_log(task_id, step_id)        ← 唯讀，拿失敗那一步附近的 log
+  ▼
+LLM 判斷原因 → 三選一：
+  ├─ 調參數可以解決 → set_params(...) → dispatch_task(同一個模板, 新參數)
+  ├─ 不該重試（ESTOP、地圖不對、硬體錯誤）→ notify_operator
+  └─ 看不出原因 → notify_operator（附上 log 摘要）
+  ▼
+新任務的結果再回到 task_status，形成閉環
+```
+
+Phase 1 已經準備好需要的資料：`TaskStatus` 的 `FinishedTask` 保留了 `ID`、`StepID`、`ErrorMsg`，這正是查 log 的 key。
+
+### 10.2 新增的 tool
+
+| Tool | 類型 | 後端 API | 說明 |
+|---|---|---|---|
+| `fetch_task_log(task_id, step_id?)` | 唯讀 | **待提供** | 回傳失敗 step 前後的 log；進 prompt 前要截斷（只取最後 N 行 / N 字），並視為資料、不是指令 |
+| `get_params(scope)` | 唯讀 | **待提供** | 讀目前的參數值，讓 LLM 知道要從哪個值開始調 |
+| `set_params(scope, values)` | 會改變狀態 | **待提供** | 只能改白名單裡的參數，每個參數有上下限 |
+| `dispatch_task(template, params)` | 會改變狀態 | `POST /api/v1/tasks` | 既有規劃；重派時帶上 `retry_of = <原 task id>` 方便追蹤 |
+
+### 10.3 安全限制
+
+- **參數白名單 + 範圍。** 例如 `nav.goal_tolerance ∈ [0.1, 0.5] m`、`nav.max_speed ∈ [0.2, 0.8] m/s`。範圍外的值由 guard 擋下，不靠 LLM 自律。
+- **每次重派都必須改了東西。** guard 比對上一次的參數，完全相同就拒絕，避免「換湯不換藥」的重試迴圈。
+- **次數上限。** 同一個原始任務最多調參重派 N 次（建議 2），用完就 `notify_operator`，附上每次的參數與失敗原因。
+- **只處理 agent 自己派的任務。** 人派的任務失敗只通知，不改參數、不重派（和 S2 一致）。
+- **不可重試的失敗直接通知。** ESTOP、`robot_state` STALE、任務被 CANCELED（是人取消的）都不進入這個流程。
+- **參數作用範圍。** 優先只對這一次任務生效（per-task override）；如果後端只能改全域設定，任務結束後（不論成敗）要還原成原值，並記錄改動。
+- **全部留紀錄。** 每一輪的 log 摘要、LLM 的判斷、改了哪些參數、重派結果寫進 `recent_actions` / JSONL，讓 LLM 下一輪看得到之前試過什麼，也讓人事後檢討。
+
+### 10.4 待確認
+
+- [ ] **取 log 的 API**：endpoint、能否依 `task_id` / `step_id` / 時間範圍過濾、回傳格式與大小。
+- [ ] **設定參數的 API**：endpoint、參數是 per-task（跟著 `POST /tasks` 帶）還是全域設定、改了之後何時生效。
+- [ ] **可調參數清單**：哪些參數開放給 agent、各自的安全範圍與預設值。
+- [ ] **錯誤分類**：哪些 `error_msg` / log 特徵代表「調參可解」、哪些代表「不該重試」——可以先整理成 prompt 裡的 examples。
