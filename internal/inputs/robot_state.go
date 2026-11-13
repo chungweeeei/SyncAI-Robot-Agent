@@ -63,21 +63,22 @@ const (
 
 // RobotStatus 是 guard 用來做決策的型別化狀態；LLM 看到的是 formatRobot 產生的文字。
 type RobotStatus struct {
-	SourceTS    int64  // payload 的 timestamp（秒）
-	Mode        string // MAINTENANCE / MANUAL / AUTO / UNKNOWN
-	Motion      string // driver 沒回報時強制為 UNKNOWN
-	Policy      string // driver 沒回報時強制為 UNKNOWN
-	PoseValid   bool
-	X, Y        float64
-	YawDeg      float64
-	Velocity    float64
-	Map         string
-	Battery     int
-	RSSI        int
-	MotorCount  int
-	MotorsSeen  bool     // false = 沒有任何 motor 資料，driver_manager 可能沒在跑
-	MotorFaults []string // error != 0 的關節
-	HotMotors   []string // 溫度 >= MotorHotC 的關節
+	SourceTS     int64  // payload 的 timestamp（秒）
+	Mode         string // MAINTENANCE / MANUAL / AUTO / UNKNOWN
+	Motion       string // driver 沒回報時強制為 UNKNOWN
+	Policy       string // driver 沒回報時強制為 UNKNOWN
+	SafetyLocked bool   // driver_manager's software safety lock
+	PoseValid    bool
+	X, Y         float64
+	YawDeg       float64
+	Velocity     float64
+	Map          string
+	Battery      int
+	RSSI         int
+	MotorCount   int
+	MotorsSeen   bool     // false = 沒有任何 motor 資料，driver_manager 可能沒在跑
+	MotorFaults  []string // error != 0 的關節
+	HotMotors    []string // 溫度 >= MotorHotC 的關節
 }
 
 // RobotState 是 "robot_state" sensor：輪詢 backend 的 /api/v1/robot/state。
@@ -198,16 +199,17 @@ func (s *RobotState) poll(ctx context.Context, wake WakeFunc) {
 // fromDTO 把 backend 的 JSON 轉成型別化的狀態。
 func fromDTO(d backend.RobotState, cfg RobotStateConfig) RobotStatus {
 	st := RobotStatus{
-		SourceTS:   d.Timestamp,
-		Mode:       d.Mode,
-		Motion:     d.LowLevelMode.Motion,
-		Policy:     d.LowLevelMode.Policy,
-		PoseValid:  d.LocalizationValid,
-		Map:        d.Map,
-		Battery:    d.BatteryStatus.BatteryPercentage,
-		RSSI:       d.NetworkStatus.RSSI,
-		MotorCount: len(d.MotorStatus),
-		MotorsSeen: len(d.MotorStatus) > 0,
+		SourceTS:     d.Timestamp,
+		Mode:         d.Mode,
+		Motion:       d.LowLevelMode.Motion,
+		Policy:       d.LowLevelMode.Policy,
+		PoseValid:    d.LocalizationValid,
+		SafetyLocked: d.LowLevelMode.SafetyLocked,
+		Map:          d.Map,
+		Battery:      d.BatteryStatus.BatteryPercentage,
+		RSSI:         d.NetworkStatus.RSSI,
+		MotorCount:   len(d.MotorStatus),
+		MotorsSeen:   len(d.MotorStatus) > 0,
 	}
 	if st.PoseValid {
 		p := d.LocalizationStatus.Position
@@ -244,6 +246,13 @@ func transitions(prev, cur RobotStatus, battNotify int, cfg RobotStateConfig) ([
 			r = append(r, "damping")
 		case MotionUnknown:
 			r = append(r, "motion_unknown")
+		}
+	}
+	if cur.SafetyLocked != prev.SafetyLocked {
+		if cur.SafetyLocked {
+			r = append(r, "safety_locked")
+		} else {
+			r = append(r, "safety_released")
 		}
 	}
 	if cur.PoseValid != prev.PoseValid {
@@ -334,6 +343,10 @@ func formatRobot(st RobotStatus, cfg RobotStateConfig) string {
 			m += fmt.Sprintf(" (policy %s)", st.Policy)
 		}
 		parts = append(parts, m)
+	}
+
+	if st.SafetyLocked {
+		parts = append(parts, "safety lock ENGAGED — do not issue any task")
 	}
 
 	if st.PoseValid {

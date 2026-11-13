@@ -19,6 +19,10 @@ type RobotState struct {
 		// STAND / LOCOMOTION / LIE_DOWN / DAMPING / ESTOP / UNKNOWN。
 		// driver 沒回報時也是 PPO/STAND，必須搭配 MotorStatus 是否為空來判斷。
 		Motion string `json:"motion"`
+		// driver_manager's software safety lock. While engaged cmd_vel is dropped and
+		// every task is canceled. Also false before the driver has published, which
+		// cannot be told apart from a real release.
+		SafetyLocked bool `json:"safety_locked"`
 	} `json:"low_level_mode"`
 	// 只代表 map -> base_link 的 TF 存在，不代表定位品質。
 	// false 時 LocalizationStatus 是全零的佔位值。

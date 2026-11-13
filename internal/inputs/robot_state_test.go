@@ -32,6 +32,7 @@ func TestTransitions(t *testing.T) {
 		{"estop", func(s *RobotStatus) { s.Motion = "ESTOP" }, []string{"estop"}},
 		{"damping", func(s *RobotStatus) { s.Motion = "DAMPING" }, []string{"damping"}},
 		{"locomotion is quiet", func(s *RobotStatus) { s.Motion = "LOCOMOTION" }, nil},
+		{"safety lock", func(s *RobotStatus) { s.SafetyLocked = true }, []string{"safety_locked"}},
 		{"pose lost", func(s *RobotStatus) { s.PoseValid = false }, []string{"pose_lost"}},
 		{"map", func(s *RobotStatus) { s.Map = "dp2f" }, []string{"map_changed"}},
 		{"motors missing", func(s *RobotStatus) {

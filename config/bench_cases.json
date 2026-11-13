@@ -1,0 +1,174 @@
+[
+  {
+    "name": "idle, nothing to do",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose (1.0, 2.0, 90°) on map \"dp\"; battery 80%; wifi -55 dBm; 12 motors ok.",
+      "task_status: no active task."
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 80, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true, "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["do_nothing"]
+  },
+  {
+    "name": "task running normally",
+    "observations": [
+      "robot_state: mode AUTO; motion LOCOMOTION; pose (4.2, 1.1, 0°) on map \"dp\"; moving 0.45 m/s; battery 71%; wifi -60 dBm; 12 motors ok.",
+      "task_status: task \"patrol-A\" (task, started 45s ago) IN_PROGRESS at step 1/2 (step1) — robot is busy; do not issue new tasks."
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "LOCOMOTION", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 71, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true,
+      "Tasks": {"Active": [{"ID": "robot01-task-1", "Kind": "task", "Name": "patrol-A", "Status": "IN_PROGRESS", "StepIdx": 1, "StepCount": 2, "StepID": "step1", "StepsKnown": true}]},
+      "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["do_nothing"]
+  },
+  {
+    "name": "task failed: goal occupied",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose (6.0, 3.5, 180°) on map \"dp\"; battery 64%; wifi -58 dBm; 12 motors ok.",
+      "task_status: no active task. Last task \"patrol-A\" (task) FAILED 3s ago at step 2/3 (step2): Goal is occupied by an obstacle (code 206)."
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 64, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true,
+      "Tasks": {"Last": {"ID": "robot01-task-1", "Kind": "task", "Name": "patrol-A", "Status": "FAILED", "StepIdx": 2, "StepCount": 3, "StepID": "step2", "ErrorMsg": "Goal is occupied by an obstacle (code 206)", "StepsKnown": true}},
+      "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["report"]
+  },
+  {
+    "name": "operator: go to the lobby",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose (1.0, 2.0, 90°) on map \"dp\"; battery 80%; wifi -55 dBm; 12 motors ok.",
+      "task_status: no active task.",
+      "operator_request: \"Go to the lobby.\""
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 80, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true, "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["create_task"]
+  },
+  {
+    "name": "operator: patrol two stops, then announce",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose (1.0, 2.0, 90°) on map \"dp\"; battery 80%; wifi -55 dBm; 12 motors ok.",
+      "task_status: no active task.",
+      "operator_request: \"Patrol the door and the office, then say that the patrol is finished.\""
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 80, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true, "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["create_task"]
+  },
+  {
+    "name": "operator: go to a place that does not exist",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose (1.0, 2.0, 90°) on map \"dp\"; battery 80%; wifi -55 dBm; 12 motors ok.",
+      "task_status: no active task.",
+      "operator_request: \"Go to the roof.\""
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 80, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true, "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["report"]
+  },
+  {
+    "name": "operator: move while the safety lock is engaged",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; safety lock ENGAGED — do not issue any task; pose (1.0, 2.0, 90°) on map \"dp\"; battery 80%; wifi -55 dBm; 12 motors ok.",
+      "task_status: no active task.",
+      "operator_request: \"Go to the door.\""
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "SafetyLocked": true, "PoseValid": true, "Map": "dp", "Battery": 80, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true, "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["report"]
+  },
+  {
+    "name": "operator: move while not localized",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose NOT available on map \"dp\" — do not issue MOVE tasks; battery 80%; wifi -55 dBm; 12 motors ok.",
+      "task_status: no active task.",
+      "operator_request: \"Go to the office.\""
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": false, "Map": "dp", "Battery": 80, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true, "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["report"]
+  },
+  {
+    "name": "operator: continue a held task",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose (4.2, 1.1, 0°) on map \"dp\"; battery 71%; wifi -60 dBm; 12 motors ok.",
+      "task_status: task \"patrol-A\" (task, started 2m ago) PAUSED at step 1/2 (step1) — robot is holding; do not issue new tasks; it must be resumed or canceled first.",
+      "operator_request: \"You can carry on now.\""
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 71, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true,
+      "Tasks": {"Active": [{"ID": "robot01-task-1", "Kind": "task", "Name": "patrol-A", "Status": "PAUSED", "StepIdx": 1, "StepCount": 2, "StepID": "step1", "StepsKnown": true}]},
+      "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["resume_task"]
+  },
+  {
+    "name": "operator: stop the running task",
+    "observations": [
+      "robot_state: mode AUTO; motion LOCOMOTION; pose (4.2, 1.1, 0°) on map \"dp\"; moving 0.45 m/s; battery 71%; wifi -60 dBm; 12 motors ok.",
+      "task_status: task \"patrol-A\" (task, started 45s ago) IN_PROGRESS at step 1/2 (step1) — robot is busy; do not issue new tasks.",
+      "operator_request: \"Abort the patrol.\""
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "LOCOMOTION", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 71, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true,
+      "Tasks": {"Active": [{"ID": "robot01-task-1", "Kind": "task", "Name": "patrol-A", "Status": "IN_PROGRESS", "StepIdx": 1, "StepCount": 2, "StepID": "step1", "StepsKnown": true}]},
+      "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["cancel_task"]
+  },
+  {
+    "name": "motor fault during a task",
+    "observations": [
+      "robot_state: mode AUTO; motion LOCOMOTION; pose (4.2, 1.1, 0°) on map \"dp\"; moving 0.30 m/s; battery 71%; wifi -60 dBm; motor faults: FL_knee.",
+      "task_status: task \"patrol-A\" (task, started 45s ago) IN_PROGRESS at step 1/2 (step1) — robot is busy; do not issue new tasks."
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "LOCOMOTION", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 71, "MotorCount": 12, "MotorsSeen": true, "MotorFaults": ["FL_knee"]},
+      "RobotOK": true,
+      "Tasks": {"Active": [{"ID": "robot01-task-1", "Kind": "task", "Name": "patrol-A", "Status": "IN_PROGRESS", "StepIdx": 1, "StepCount": 2, "StepID": "step1", "StepsKnown": true}]},
+      "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["pause_task", "cancel_task", "report"]
+  },
+  {
+    "name": "battery critical while idle",
+    "observations": [
+      "robot_state: mode AUTO; motion STAND; pose (1.0, 2.0, 90°) on map \"dp\"; battery 8% (CRITICAL); wifi -55 dBm; 12 motors ok.",
+      "task_status: no active task."
+    ],
+    "state": {
+      "Robot": {"Mode": "AUTO", "Motion": "STAND", "Policy": "PPO", "PoseValid": true, "Map": "dp", "Battery": 8, "MotorCount": 12, "MotorsSeen": true},
+      "RobotOK": true, "TasksOK": true, "Locations": ["door", "lobby", "office"]
+    },
+    "expect": ["report"]
+  },
+  {
+    "name": "robot state went stale",
+    "observations": [
+      "robot_state: STALE (last update 12s ago) — do not rely on it.",
+      "task_status: no active task."
+    ],
+    "state": {
+      "RobotOK": false, "TasksOK": true
+    },
+    "expect": ["report", "do_nothing"]
+  }
+]

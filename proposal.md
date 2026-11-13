@@ -463,6 +463,106 @@ func expandEnv(s string) string         // regexp `\$\{([A-Za-z_][A-Za-z0-9_]*)(
 
 ## 9. 之後的路線（不在這次範圍）
 
-- **Phase 2：接 LLM。** 在 `tick` 裡 `fuser.Fuse` 之後呼叫 LLM；fuser 加 "Available actions" section；`-print-prompt` 改預設 false。
-- **Phase 3：actions + guard。** 把 LLM 輸出對應到後端的 `POST /api/v1/tasks`（step type `MOVE / STANDUP / LIEDOWN / SPEAK / WAIT`）；guard 用 `RobotState.Current()` 和 `TaskStatus.Current()` 的型別化狀態擋動作（ESTOP、pose 無效、busy），**不解析 prompt 文字**。
+- **Phase 2：接 LLM（Shadow mode）。** 見 §10。
+- **Phase 3：真的執行 actions。** 把通過 guard 的 tool call 對應到後端的 `POST /api/v1/tasks` 等端點。guard 本體在 Phase 2 已經寫好並以 dry-run 方式運作（§10.4）。
 - 更多 sensor 時再考慮 OM1 的 registry 與 config 驅動接線。
+
+---
+
+## 10. Phase 2：Shadow mode（Mac simulation → Orin）
+
+> 範圍：接上 local LLM，讓它對真實狀態提出 tool call，**只判定、只記錄，不執行**。
+> 先在 Mac 的 simulation 上驗證行為，再到 AGX Orin 32GB（JetPack 6）量測效能。
+
+### 10.1 為什麼先做 Shadow mode
+
+- LLM 是不可信的輸入。在讓它真的派工之前，要先知道它在各種狀態下會提出什麼。
+- Shadow mode 留下的記錄（prompt、狀態、回應、guard 判定）可以重放給不同模型，比較條件完全一致。
+- 本階段 `internal/backend` **只有 GET 方法**。agent 在結構上無法讓機器狗動作，不是靠 prompt 約束。
+
+### 10.2 不碰底層控制是怎麼保證的
+
+| 層 | 做法 |
+|---|---|
+| 介面 | agent 只打 backend `:3000` 的 REST。backend 自己送 navigation goal，agent 不接 ROS、不發 `cmd_vel`。 |
+| Tool 定義 | 只有 6 個高階 tool（§10.3）。沒有速度、gait key、關節目標這類參數，LLM 無法「表達」低階控制。 |
+| 地點 | 地點名稱以 enum 寫進 JSON schema，來源是 `GET /api/v1/maps/{name}/vertices`（只取 `MOVE` 類型）。LLM 不能給座標，也不能給不存在的地點。 |
+| Guard | `tools.Validate` 用型別化狀態再判一次（§10.4）。prompt 裡的 governance 只是建議，不是防線。 |
+
+backend 本身沒有認證，teleop、motion key、policy mode 與任務 API 在同一個 port。所以這條線必須守在 agent 這一側。
+
+### 10.3 Tools（`internal/tools`）
+
+| Tool | 參數 | 對應的 backend 動作（Phase 3 才執行） |
+|---|---|---|
+| `create_task` | `steps[]`，每個 step 的 `type` 為 `MOVE` / `PATROL` / `SPEAK` / `WAIT` / `STANDUP` / `LIEDOWN` | `POST /api/v1/tasks` |
+| `pause_task` / `resume_task` / `cancel_task` | 無 | `POST …/pause`、`…/resume`、`DELETE /api/v1/tasks/{id}` |
+| `report` | `message` | 給操作員的說明（失敗原因、風險、建議） |
+| `do_nothing` | `reason`（可省略） | 無 |
+
+- 不提供 `CHARGE`：`dev` 分支上 `charge.xml` 不存在，回充目前不可用。
+- 地圖上沒有任何 vertex 時，schema 裡不會出現 `MOVE` 與 `PATROL`。
+
+### 10.4 Guard（`tools.Validate`）
+
+輸入是 tool call 與 `tools.State`（`RobotState.Current()`、`TaskStatus.Current()`、地點清單）。**不解析 prompt 文字。**
+
+| 情況 | 判定 |
+|---|---|
+| 不認得的 tool、參數不符合 schema（含多出來的欄位，例如 `x` / `y`） | 拒絕，標記為 malformed |
+| `create_task`：robot 狀態不明或過期、非 AUTO、safety lock、ESTOP、DAMPING | 拒絕 |
+| `create_task`：task 狀態不明，或已有任務（含暫停中） | 拒絕 |
+| `MOVE` / `PATROL`：定位無效、motion UNKNOWN、地點不在清單、`PATROL` 少於兩個點 | 拒絕 |
+| `STANDUP` / `LIEDOWN`：motion UNKNOWN | 拒絕 |
+| `SPEAK` 文字為空或超過 1000 字、`WAIT` 不在 1–3600 秒 | 拒絕 |
+| `pause_task` 但沒有任務在跑、`resume_task` 但沒有暫停中的任務、`cancel_task` 但沒有任務 | 拒絕 |
+| `cancel_task` / `pause_task` 在 safety lock 或 ESTOP 下 | **允許**（停下來永遠可以） |
+
+為了讓 guard 看得到 safety lock，`robot_state` sensor 新增了 `SafetyLocked`（來自 `low_level_mode.safety_locked`），並在狀態改變時 wake `robot_state:safety_locked` / `safety_released`。
+
+### 10.5 什麼時候呼叫 LLM（`internal/runtime`）
+
+- 每個 **wake tick** 都呼叫（任務開始、失敗、estop、定位遺失……）。
+- 閒置的 timer tick 每 `decide_every` 個才呼叫一次（預設 12，也就是約 60 秒）。設成 0 就只在 wake 時呼叫。
+- 呼叫在 loop 的 goroutine 上同步進行，所以**同時只會有一個**。呼叫期間進來的 wake 會合併成下一個 tick。
+- 逾時由 `llm.timeout_s` 控制，逾時就放棄這一次並記錄錯誤。
+
+### 10.6 LLM client（`internal/llm`）
+
+- 只用 stdlib，打 OpenAI 相容的 `/v1/chat/completions`。llama-server 與 Ollama 都能用，Mac 與 Orin 只差 `base_url`。
+- 融合後的 prompt 以單一 user message 送出，tools 以 `tools` 參數送出。
+- tok/s 優先取 llama-server 回應裡的 `timings.predicted_per_second`；沒有時用 completion tokens 除以整體耗時（會把 prompt 處理時間算進去，數字偏低）。
+
+### 10.7 記錄格式（`internal/shadow`）
+
+每次決策一行 JSON，預設寫到 `shadow.jsonl`（已加入 `.gitignore`）：
+
+```json
+{"time": "…", "tick": 4, "trigger": "wake", "reasons": ["task_status:task_failed"], "model": "…",
+ "prompt": "…", "state": {"Robot": {…}, "RobotOK": true, "Tasks": {…}, "TasksOK": true, "Locations": ["lobby"]},
+ "calls": [{"name": "report", "arguments": "{\"message\": \"…\"}", "allowed": true}],
+ "latency_ms": 1500, "prompt_tokens": 300, "completion_tokens": 20, "tokens_per_second": 25}
+```
+
+`state` 一起存下來，是為了之後重放時能用同一份狀態再判一次。
+
+### 10.8 模型比較（`cmd/bench`）
+
+- 輸入：shadow 記錄（`-log`）與手寫題目（`-cases config/bench_cases.json`，13 題，含文字派工指令）。
+- 一次執行評一個模型（`config/dog.json` 的 `llm` 指到的那個）。
+- 輸出：格式合法率、guard 通過率、與預期 tool 一致率、延遲 p50 / p95、tok/s。
+- 題目裡的 `operator_request:` 是為了測「自然語言派工」而放的觀測行。真正的操作員輸入來源還沒有做。
+
+候選模型（GGUF Q4_K_M）：Qwen3.5-4B、Nemotron-3.5-Bolt-E4B、Gemma 4 E2B、Qwen3.5-9B（品質上限對照）。
+Kimi 的開放權重只有兆級參數的模型，Orin 跑不動；DeepSeek 沒有官方小模型，R1 distill 的 tool calling 支援說法不一，只當選配對照。
+
+### 10.9 測試順序
+
+1. **Mac simulation**（`docs/sim-shadow.md`）：驗證行為，比較模型「品質」。Mac 的速度與記憶體數字不能代表 Orin。
+2. **Orin**（`docs/orin-llm.md`）：用 Mac 階段留下的同一批記錄重跑 `cmd/bench`，量延遲、tok/s，並用 `tegrastats` 看記憶體與功耗。
+
+### 10.10 這次沒做的事
+
+- 真的執行 tool call（Phase 3）。
+- 操作員文字輸入、ASR、VLM、中文 TTS。
+- 修改 `SyncAI-Robot-Backend`、`SyncAI-Robot-Workspace`、`SyncAI-Robot-Simulation`。
