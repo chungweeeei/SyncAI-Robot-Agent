@@ -73,6 +73,7 @@ func run() error {
 				Timeout:     time.Duration(cfg.LLM.TimeoutS * float64(time.Second)),
 				MaxTokens:   cfg.LLM.MaxTokens,
 				Temperature: cfg.LLM.Temperature,
+				Thinking:    cfg.LLM.Thinking,
 			}),
 			Model:    cfg.LLM.Model,
 			Robot:    robot.Current,

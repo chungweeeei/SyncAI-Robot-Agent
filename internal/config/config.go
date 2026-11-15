@@ -38,6 +38,9 @@ type LLM struct {
 	TimeoutS    float64 `json:"timeout_s"`
 	MaxTokens   int     `json:"max_tokens"`
 	Temperature float64 `json:"temperature"`
+	// Thinking lets a reasoning model think first. It multiplies the latency and
+	// the tokens of a decision, so max_tokens must be raised with it.
+	Thinking bool `json:"thinking"`
 }
 
 // Load reads, expands and validates a configuration file.

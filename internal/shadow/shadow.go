@@ -61,6 +61,8 @@ type Record struct {
 	Content string `json:"content,omitempty"`
 	Calls   []Call `json:"calls,omitempty"`
 	Error   string `json:"error,omitempty"` // the completion failed; Calls is empty
+	// Truncated: the answer ran into max_tokens and is cut short.
+	Truncated bool `json:"truncated,omitempty"`
 
 	LatencyMS        int64   `json:"latency_ms"`
 	PromptTokens     int     `json:"prompt_tokens"`
@@ -115,6 +117,9 @@ func (s *Shadow) Decide(ctx context.Context, t runtime.Tick) {
 		if len(rec.Calls) == 0 {
 			s.Log.Warn("model made no tool call", "tick", t.N, "content", resp.Content)
 		}
+		if resp.Truncated {
+			s.Log.Warn("answer was cut off at max_tokens", "tick", t.N, "completion_tokens", resp.CompletionTokens)
+		}
 	}
 	s.write(rec)
 }
@@ -131,6 +136,7 @@ func Request(prompt string, locations []string) llm.Request {
 // Fill records a response and judges each of its calls against st.
 func (r *Record) Fill(resp llm.Response, st tools.State) {
 	r.Content = resp.Content
+	r.Truncated = resp.Truncated
 	r.LatencyMS = resp.Latency.Milliseconds()
 	r.PromptTokens, r.CompletionTokens, r.TokensPerSecond = resp.PromptTokens, resp.CompletionTokens, resp.TokensPerSecond
 	r.Calls = nil

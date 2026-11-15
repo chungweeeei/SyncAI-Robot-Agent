@@ -21,6 +21,13 @@ type Config struct {
 	Timeout     time.Duration // bound on one completion
 	MaxTokens   int
 	Temperature float64
+
+	// Thinking lets a reasoning model think before it answers. Off, the request
+	// carries chat_template_kwargs {"enable_thinking": false}, which llama-server
+	// hands to the model's chat template. Thinking tokens count against
+	// MaxTokens: measured on Qwen3.5-4B, they used up a 512-token budget before
+	// any tool call was written, and one decision took 10 s instead of 1 s.
+	Thinking bool
 }
 
 // Message is one chat message.
@@ -56,7 +63,10 @@ type Response struct {
 
 	PromptTokens     int
 	CompletionTokens int
-	Latency          time.Duration // the whole request, as seen from here
+	// Truncated: the model ran into MaxTokens. Whatever it was writing, a tool
+	// call's arguments included, is cut short.
+	Truncated bool
+	Latency   time.Duration // the whole request, as seen from here
 	// TokensPerSecond is the server's own decode rate (llama-server's
 	// timings.predicted_per_second) when it reports one; otherwise
 	// CompletionTokens over Latency, which also counts prompt processing.
@@ -96,10 +106,13 @@ type (
 		MaxTokens   int        `json:"max_tokens,omitempty"`
 		Temperature float64    `json:"temperature"`
 		Stream      bool       `json:"stream"`
+		// A llama-server extension; other servers ignore it.
+		ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 	}
 	wireResponse struct {
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content   *string `json:"content"`
 				ToolCalls []struct {
 					Function struct {
@@ -126,6 +139,9 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 		Messages:    req.Messages,
 		MaxTokens:   c.cfg.MaxTokens,
 		Temperature: c.cfg.Temperature,
+	}
+	if !c.cfg.Thinking {
+		wr.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
 	}
 	for _, t := range req.Tools {
 		wr.Tools = append(wr.Tools, wireTool{Type: "function", Function: wireFunction(t)})
@@ -168,6 +184,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 	out := Response{
 		PromptTokens:     w.Usage.PromptTokens,
 		CompletionTokens: w.Usage.CompletionTokens,
+		Truncated:        w.Choices[0].FinishReason == "length",
 		Latency:          latency,
 		TokensPerSecond:  w.Timings.PredictedPerSecond,
 	}

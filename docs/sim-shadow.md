@@ -18,6 +18,11 @@ llama-server -m ~/models/<model>.gguf --port 8080 --ctx-size 8192 --jinja
 
 - `--jinja` 啟用模型自己的 chat template，tool call 才會被解析成 `tool_calls`。
 - 一個 `llama-server` 只載入一個模型；換模型就重啟 server。
+- 推理型模型（例如 Qwen3.5）預設會先「思考」再回答。`config/dog.json` 的 `llm.thinking` 預設為 `false`，
+  agent 會在請求裡帶 `chat_template_kwargs: {"enable_thinking": false}` 把它關掉。
+  在這台 Mac 上以 Qwen3.5-4B Q4_K_M 實測：開著思考時 13 題只有 5 題下出合法的 tool call
+  （思考把 512 個 token 用完，每題約 10 秒）；關掉後 13 題全部合法，每題約 1.6 秒。
+  要開思考的話，`max_tokens` 必須一起調高。
 - 備案是 Ollama（這台 Mac 已安裝，但目前沒有任何模型）：
   `SYNCAI_LLM_URL=http://localhost:11434 SYNCAI_LLM_MODEL=<ollama 的模型名稱>`。
 

@@ -59,7 +59,9 @@ func TestCompleteToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools, _ := req["tools"].([]any)
-	if req["model"] != "m" || req["stream"] != false || req["max_tokens"] != float64(64) || len(tools) != 1 {
+	kwargs, _ := req["chat_template_kwargs"].(map[string]any)
+	if req["model"] != "m" || req["stream"] != false || req["max_tokens"] != float64(64) || len(tools) != 1 ||
+		kwargs["enable_thinking"] != false || resp.Truncated {
 		t.Errorf("request = %s", *sent)
 	}
 	if fn := tools[0].(map[string]any)["function"].(map[string]any); fn["name"] != "report" || fn["parameters"] == nil {
@@ -75,6 +77,23 @@ func TestCompleteTextOnly(t *testing.T) {
 	}
 	if resp.Content != "I will wait." || len(resp.ToolCalls) != 0 || resp.TokensPerSecond <= 0 {
 		t.Errorf("response = %+v", resp)
+	}
+}
+
+func TestCompleteTruncatedAndThinking(t *testing.T) {
+	c, sent := serve(t, 200, `{"choices": [{"finish_reason": "length", "message": {"content": "", "tool_calls": [
+	    {"function": {"name": "report", "arguments": "{\"message\": \"Safety lock"}}]}}]}`)
+	c.cfg.Thinking = true
+	resp, err := c.Complete(context.Background(), Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Truncated || len(resp.ToolCalls) != 1 {
+		t.Errorf("response = %+v, want it marked truncated with the cut-off call kept", resp)
+	}
+	// With thinking on, the model's own default is left alone.
+	if strings.Contains(*sent, "chat_template_kwargs") {
+		t.Errorf("request = %s", *sent)
 	}
 }
 

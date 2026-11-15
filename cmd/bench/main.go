@@ -109,6 +109,7 @@ func run() error {
 		Timeout:     time.Duration(cfg.LLM.TimeoutS * float64(time.Second)),
 		MaxTokens:   cfg.LLM.MaxTokens,
 		Temperature: cfg.LLM.Temperature,
+		Thinking:    cfg.LLM.Thinking,
 	})
 
 	var results []result
@@ -215,6 +216,9 @@ func (r result) line() string {
 	case len(r.Record.Calls) == 0:
 		fmt.Fprintf(&b, "\n       no tool call; said: %q", r.Record.Content)
 	}
+	if r.Record.Truncated {
+		fmt.Fprintf(&b, "\n       cut off at max_tokens (%d completion tokens)", r.Record.CompletionTokens)
+	}
 	for _, c := range r.Record.Calls {
 		fmt.Fprintf(&b, "\n       %s %s", c.Name, c.Arguments)
 		if !c.Allowed {
@@ -227,9 +231,9 @@ func (r result) line() string {
 // summarize renders the scores of one model.
 func summarize(results []result) string {
 	var (
-		errs, formed, passed, withExpect, expected int
-		latencies                                  []int64
-		tps                                        float64
+		errs, formed, passed, withExpect, expected, truncated int
+		latencies                                             []int64
+		tps                                                   float64
 	)
 	for _, r := range results {
 		if r.Record.Error != "" {
@@ -238,6 +242,9 @@ func summarize(results []result) string {
 		}
 		latencies = append(latencies, r.Record.LatencyMS)
 		tps += r.Record.TokensPerSecond
+		if r.Record.Truncated {
+			truncated++
+		}
 		if r.wellFormed() {
 			formed++
 		}
@@ -257,6 +264,9 @@ func summarize(results []result) string {
 	fmt.Fprintf(&b, "  asked              %d (%d failed to complete)\n", n, errs)
 	fmt.Fprintf(&b, "  well-formed calls  %s\n", ratio(formed, n))
 	fmt.Fprintf(&b, "  passed the guard   %s\n", ratio(passed, n))
+	if truncated > 0 {
+		fmt.Fprintf(&b, "  cut off            %s hit max_tokens\n", ratio(truncated, n))
+	}
 	if withExpect > 0 {
 		fmt.Fprintf(&b, "  expected tool      %s\n", ratio(expected, withExpect))
 	}
